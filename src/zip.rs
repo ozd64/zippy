@@ -3,6 +3,8 @@ use std::error::Error;
 use std::fmt::Display;
 use std::io::{Read, Seek, SeekFrom};
 
+use crate::date_time::ZipDateTime;
+
 const MIN_EOF_CENTRAL_DIR_SIZE: u64 = 0x16;
 const MIN_CENTRAL_DIR_SIZE: u64 = 0x2E;
 const EOF_CENTRAL_DIR_SIGN: u32 = 0x06054b50;
@@ -151,6 +153,7 @@ struct ZipFile {
     //size are written in the local file header if the below flag is set to false then the
     //information is kept in data descriptor follewed after local file header
     data_descriptor_used: bool,
+    date_time: ZipDateTime,
 }
 
 impl EndOfCentralDirectory {
@@ -254,12 +257,17 @@ impl ZipFile {
         };
 
         let data_descriptor_used = ((general_purpose_bit_flag >> 3) & 0x0001) == 1;
+        let date = LittleEndian::read_u16(&central_dir_bytes[14..16]);
+        let time = LittleEndian::read_u16(&central_dir_bytes[12..14]);
+
+        let zip_date_time = ZipDateTime::from_bytes(date, time);
 
         Ok(Self {
             environment,
             is_encrypted,
             compression_method,
             data_descriptor_used,
+            date_time: zip_date_time,
         })
     }
 }
