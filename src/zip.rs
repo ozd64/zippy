@@ -146,6 +146,7 @@ struct EndOfCentralDirectory {
 }
 
 struct ZipFile {
+    offset: u32,
     environment: FileEnvironment,
     is_encrypted: bool,
     compression_method: CompressionMethod,
@@ -206,9 +207,12 @@ impl EndOfCentralDirectory {
 impl ZipFile {
     pub fn from_readable<T>(readable: &mut T) -> Result<ZipFile, ZipFileError>
     where
-        T: Read,
+        T: Read + Seek,
     {
         let mut central_dir_bytes = vec![0; MIN_CENTRAL_DIR_SIZE as usize];
+        let offset = (readable
+            .seek(SeekFrom::Current(0))
+            .map_err(|err| ZipFileError::IOError(err.to_string()))?) as u32;
 
         readable
             .read_exact(&mut central_dir_bytes)
@@ -263,6 +267,7 @@ impl ZipFile {
         let zip_date_time = ZipDateTime::from_bytes(date, time);
 
         Ok(Self {
+            offset,
             environment,
             is_encrypted,
             compression_method,
