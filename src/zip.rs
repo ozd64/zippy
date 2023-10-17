@@ -20,6 +20,7 @@ enum EndOfCentralDirectoryError {
 enum ZipFileError {
     InvalidSignature(u32),
     UnsupportedZipVersion(u8),
+    UnsupportedCompression(u16),
     FileEnvironmentError(FileEnvironmentError),
     IOError(String),
 }
@@ -38,6 +39,20 @@ enum FileEnvironment {
 #[derive(Debug, PartialEq, Eq)]
 enum FileEnvironmentError {
     InvalidFileEnvironment(u8),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DeflateCompressionMode {
+    Normal,
+    Maximum,
+    Fast,
+    SuperFast,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CompressionMethod {
+    NoCompression,
+    Deflate(DeflateCompressionMode),
 }
 
 impl Display for EndOfCentralDirectoryError {
@@ -79,6 +94,11 @@ impl Display for ZipFileError {
                     major, minor
                 )
             }
+            ZipFileError::UnsupportedCompression(comp) => write!(
+                f,
+                "Unsupported compression method. Read compression method: {}",
+                comp
+            ),
             ZipFileError::FileEnvironmentError(err) => write!(f, "{}", err),
             Self::IOError(error_msg) => write!(
                 f,
@@ -125,6 +145,12 @@ struct EndOfCentralDirectory {
 
 struct ZipFile {
     environment: FileEnvironment,
+    is_encrypted: bool,
+    compression_method: CompressionMethod,
+    //The following flag will be used for determining whether CRC-32, Compressed size, uncompressed
+    //size are written in the local file header if the below flag is set to false then the
+    //information is kept in data descriptor follewed after local file header
+    data_descriptor_used: bool,
 }
 
 impl EndOfCentralDirectory {
@@ -193,6 +219,7 @@ impl ZipFile {
 
         let zip_version = central_dir_bytes[0x04];
 
+        // We currently only support ZIP 2.0
         if zip_version != 0x14 {
             return Err(ZipFileError::UnsupportedZipVersion(zip_version));
         }
@@ -200,7 +227,40 @@ impl ZipFile {
         let environment = FileEnvironment::from_byte(central_dir_bytes[0x05])
             .map_err(|err| ZipFileError::FileEnvironmentError(err))?;
 
-        Ok(Self { environment })
+        let compression_method_bytes = LittleEndian::read_u16(&central_dir_bytes[10..12]);
+        let general_purpose_bit_flag = LittleEndian::read_u16(&central_dir_bytes[8..10]);
+
+        let is_encrypted = (general_purpose_bit_flag & 0x0001) == 1;
+
+        let compression_method = match compression_method_bytes {
+            0x00 => CompressionMethod::NoCompression,
+            0x08 => {
+                // DEFLATE compression
+                let deflate_mode = (general_purpose_bit_flag >> 1) & 0x0003;
+
+                match deflate_mode {
+                    0b00 => CompressionMethod::Deflate(DeflateCompressionMode::Normal),
+                    0b01 => CompressionMethod::Deflate(DeflateCompressionMode::Maximum),
+                    0b10 => CompressionMethod::Deflate(DeflateCompressionMode::Fast),
+                    0b11 => CompressionMethod::Deflate(DeflateCompressionMode::SuperFast),
+                    _ => CompressionMethod::Deflate(DeflateCompressionMode::Normal),
+                }
+            }
+            _ => {
+                return Err(ZipFileError::UnsupportedCompression(
+                    compression_method_bytes,
+                ))
+            }
+        };
+
+        let data_descriptor_used = ((general_purpose_bit_flag >> 3) & 0x0001) == 1;
+
+        Ok(Self {
+            environment,
+            is_encrypted,
+            compression_method,
+            data_descriptor_used,
+        })
     }
 }
 
@@ -317,5 +377,95 @@ mod tests {
             zip_file_result.err().unwrap(),
             ZipFileError::UnsupportedZipVersion(0x15)
         );
+    }
+
+    #[test]
+    fn test_unsupported_file_environment() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0xFF, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_err());
+        assert_eq!(
+            zip_file_result.err().unwrap(),
+            ZipFileError::FileEnvironmentError(FileEnvironmentError::InvalidFileEnvironment(0xFF))
+        );
+    }
+
+    #[test]
+    fn test_unsupported_compression_method() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x10, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_err());
+        assert_eq!(
+            zip_file_result.err().unwrap(),
+            ZipFileError::UnsupportedCompression(0x10)
+        );
+    }
+
+    #[test]
+    fn test_file_encryption() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert!(!zip_file_result.unwrap().is_encrypted);
+
+        cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x09, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert!(zip_file_result.unwrap().is_encrypted)
+    }
+
+    #[test]
+    fn test_data_descriptor_used() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert!(zip_file_result.unwrap().data_descriptor_used);
+
+        cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert!(!zip_file_result.unwrap().data_descriptor_used);
     }
 }
