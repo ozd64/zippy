@@ -1,6 +1,7 @@
 use byteorder::{ByteOrder, LittleEndian};
 use std::error::Error;
 use std::fmt::Display;
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 use crate::date_time::ZipDateTime;
@@ -11,7 +12,7 @@ const EOF_CENTRAL_DIR_SIGN: u32 = 0x06054b50;
 const CENTRAL_DIR_SIGN: u32 = 0x02014b50;
 
 #[derive(Debug, PartialEq, Eq)]
-enum EndOfCentralDirectoryError {
+pub enum EndOfCentralDirectoryError {
     InvalidZipFile(u64),
     InvalidSignature(u32),
     EmptyZipFile,
@@ -19,7 +20,7 @@ enum EndOfCentralDirectoryError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum ZipFileError {
+pub enum ZipFileError {
     InvalidSignature(u32),
     UnsupportedZipVersion(u8),
     UnsupportedCompression(u16),
@@ -27,7 +28,14 @@ enum ZipFileError {
     IOError(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum ZipError {
+    EndOfCentralDirectoryError(EndOfCentralDirectoryError),
+    ZipFileError(ZipFileError),
+    IOError(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum FileEnvironment {
     MsDos = 0,
     Macintosh = 7,
@@ -39,12 +47,12 @@ enum FileEnvironment {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum FileEnvironmentError {
+pub enum FileEnvironmentError {
     InvalidFileEnvironment(u8),
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum DeflateCompressionMode {
+pub enum DeflateCompressionMode {
     Normal,
     Maximum,
     Fast,
@@ -52,7 +60,7 @@ enum DeflateCompressionMode {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum CompressionMethod {
+pub enum CompressionMethod {
     NoCompression,
     Deflate(DeflateCompressionMode),
 }
@@ -113,6 +121,26 @@ impl Display for ZipFileError {
 
 impl Error for ZipFileError {}
 
+impl Display for ZipError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EndOfCentralDirectoryError(err) => {
+                write!(f, "An error occurred while reading ZIP file.\n{}", err)
+            }
+            Self::ZipFileError(err) => {
+                write!(f, "An error occurred while reading ZIP file.\n{}", err)
+            }
+            Self::IOError(error_msg) => write!(
+                f,
+                "An I/O error occured while parsing ZIP file. Message: {}",
+                error_msg
+            ),
+        }
+    }
+}
+
+impl Error for ZipError {}
+
 impl Display for FileEnvironment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -139,13 +167,21 @@ impl Display for FileEnvironmentError {
 
 impl Error for FileEnvironmentError {}
 
+impl Display for CompressionMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompressionMethod::NoCompression => write!(f, "No Compression"),
+            CompressionMethod::Deflate(_) => write!(f, "DEFLATE"),
+        }
+    }
+}
+
 struct EndOfCentralDirectory {
-    offset: u64,
     central_dir_size: u8,
     central_dir_start_offset: u32,
 }
 
-struct ZipFile {
+pub struct ZipFile {
     offset: u32,
     environment: FileEnvironment,
     is_encrypted: bool,
@@ -155,6 +191,19 @@ struct ZipFile {
     //information is kept in data descriptor follewed after local file header
     data_descriptor_used: bool,
     date_time: ZipDateTime,
+    crc32: u32,
+    compressed_size: u32,
+    uncompressed_size: u32,
+    file_name: String,
+    is_dir: bool,
+}
+
+pub struct Zip {
+    file: File,
+    zip_file_count: usize,
+    file_count: usize,
+    dir_count: usize,
+    zip_files: Vec<ZipFile>,
 }
 
 impl EndOfCentralDirectory {
@@ -174,7 +223,7 @@ impl EndOfCentralDirectory {
 
         let mut eof_central_dir_bytes = vec![0; MIN_EOF_CENTRAL_DIR_SIZE as usize];
 
-        let eof_central_dir_offset = readable
+        readable
             .seek(SeekFrom::End(-0x16))
             .map_err(|err| EndOfCentralDirectoryError::IOError(err.to_string()))?;
 
@@ -197,7 +246,6 @@ impl EndOfCentralDirectory {
         let central_dir_start_offset = LittleEndian::read_u32(&eof_central_dir_bytes[16..20]);
 
         Ok(Self {
-            offset: eof_central_dir_offset,
             central_dir_size,
             central_dir_start_offset,
         })
@@ -210,9 +258,6 @@ impl ZipFile {
         T: Read + Seek,
     {
         let mut central_dir_bytes = vec![0; MIN_CENTRAL_DIR_SIZE as usize];
-        let offset = (readable
-            .seek(SeekFrom::Current(0))
-            .map_err(|err| ZipFileError::IOError(err.to_string()))?) as u32;
 
         readable
             .read_exact(&mut central_dir_bytes)
@@ -265,6 +310,34 @@ impl ZipFile {
         let time = LittleEndian::read_u16(&central_dir_bytes[12..14]);
 
         let zip_date_time = ZipDateTime::from_bytes(date, time);
+        let crc32 = LittleEndian::read_u32(&central_dir_bytes[16..20]);
+        let compressed_size = LittleEndian::read_u32(&central_dir_bytes[20..24]);
+        let uncompressed_size = LittleEndian::read_u32(&central_dir_bytes[24..28]);
+        let file_name_len = LittleEndian::read_u16(&central_dir_bytes[28..30]) as usize;
+        let extra_field_len = LittleEndian::read_u16(&central_dir_bytes[30..32]) as u64;
+        let comment_len = LittleEndian::read_u16(&central_dir_bytes[32..34]) as u64;
+        let offset = LittleEndian::read_u32(&central_dir_bytes[42..46]);
+
+        let mut file_name_bytes = vec![0; file_name_len];
+
+        readable
+            .read_exact(&mut file_name_bytes)
+            .map_err(|err| ZipFileError::IOError(err.to_string()))?;
+
+        let file_name = String::from_utf8(file_name_bytes)
+            .map_err(|err| ZipFileError::IOError(err.to_string()))?;
+
+        let is_dir = file_name.ends_with("/");
+
+        let current_file_pos = readable
+            .seek(SeekFrom::Current(0))
+            .map_err(|err| ZipFileError::IOError(err.to_string()))?;
+
+        let new_zip_file_pos = current_file_pos + extra_field_len + comment_len;
+
+        readable
+            .seek(SeekFrom::Start(new_zip_file_pos))
+            .map_err(|err| ZipFileError::IOError(err.to_string()))?;
 
         Ok(Self {
             offset,
@@ -273,7 +346,78 @@ impl ZipFile {
             compression_method,
             data_descriptor_used,
             date_time: zip_date_time,
+            crc32,
+            compressed_size,
+            uncompressed_size,
+            file_name,
+            is_dir,
         })
+    }
+
+    pub fn file_name(&self) -> &String {
+        &self.file_name
+    }
+
+    pub fn date_time(&self) -> &ZipDateTime {
+        &self.date_time
+    }
+
+    pub fn compression_method(&self) -> &CompressionMethod {
+        &self.compression_method
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+}
+
+impl Zip {
+    pub fn from_file(mut file: File) -> Result<Zip, ZipError> {
+        let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut file)
+            .map_err(|err| ZipError::EndOfCentralDirectoryError(err))?;
+
+        file.seek(SeekFrom::Start(
+            end_of_central_dir.central_dir_start_offset as u64,
+        ))
+        .map_err(|err| ZipError::IOError(err.to_string()))?;
+
+        let mut zip_files: Vec<ZipFile> =
+            Vec::with_capacity(end_of_central_dir.central_dir_size as usize);
+
+        for _ in 0..end_of_central_dir.central_dir_size {
+            match ZipFile::from_readable(&mut file) {
+                Ok(zip_file) => zip_files.push(zip_file),
+                Err(err) => return Err(ZipError::ZipFileError(err)),
+            }
+        }
+
+        let dir_count = zip_files.iter().filter(|zip_file| zip_file.is_dir).count();
+
+        let file_count = ((end_of_central_dir.central_dir_size) as usize) - dir_count;
+
+        Ok(Self {
+            file,
+            zip_file_count: end_of_central_dir.central_dir_size as usize,
+            zip_files,
+            dir_count,
+            file_count,
+        })
+    }
+
+    pub fn zip_file_couunt(&self) -> usize {
+        self.zip_file_count
+    }
+
+    pub fn zip_files(&self) -> &Vec<ZipFile> {
+        &self.zip_files
+    }
+
+    pub fn dir_count(&self) -> usize {
+        self.dir_count
+    }
+
+    pub fn file_count(&self) -> usize {
+        self.file_count
     }
 }
 
@@ -351,7 +495,6 @@ mod tests {
 
         let eof_central_dir = eof_central_dir_result.unwrap();
 
-        assert_eq!(eof_central_dir.offset, 0x00);
         assert_eq!(eof_central_dir.central_dir_size, 1);
         assert_eq!(eof_central_dir.central_dir_start_offset, 0x00000120);
     }
@@ -480,5 +623,44 @@ mod tests {
 
         assert!(zip_file_result.is_ok());
         assert!(!zip_file_result.unwrap().data_descriptor_used);
+    }
+
+    #[test]
+    fn test_successful_zip_file_parsing() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x08, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert!(zip_file_result.unwrap().data_descriptor_used);
+
+        cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        let zip_file = zip_file_result.unwrap();
+
+        assert_eq!(zip_file.offset, 0x00000000);
+        assert_eq!(zip_file.file_name, String::from("cv_debug.log"));
+        assert_eq!(zip_file.crc32, 0xB2D7997D);
+        assert_eq!(zip_file.uncompressed_size, 0x00000130);
+        assert_eq!(zip_file.compressed_size, 0x000000C6);
+        assert_eq!(zip_file.environment, FileEnvironment::Unix);
+        assert_eq!(
+            zip_file.compression_method,
+            CompressionMethod::Deflate(DeflateCompressionMode::Normal)
+        );
+        assert!(!zip_file.is_dir);
     }
 }
