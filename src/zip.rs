@@ -369,6 +369,10 @@ impl ZipFile {
     pub fn is_dir(&self) -> bool {
         self.is_dir
     }
+
+    pub fn uncompressed_size(&self) -> u32 {
+        self.uncompressed_size
+    }
 }
 
 impl Zip {

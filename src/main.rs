@@ -2,6 +2,7 @@ use std::env::args;
 use std::fs::File;
 use std::path::PathBuf;
 
+use zippy::pretty_printer::pretty_print_zip_files;
 use zippy::zip::Zip;
 
 const ZIPPY_VERSION: &str = "0.1.0";
@@ -37,21 +38,7 @@ fn main() {
         }
     };
 
-    println!(
-        "File Count: {}, Directory Count: {}\n",
-        zip.file_count(),
-        zip.dir_count()
-    );
-    println!("File Name\tDate Time\tCompression Method\tIs Directory");
-    zip.zip_files().iter().for_each(|zip_file| {
-        println!(
-            "{}\t{}\t{}\t{}",
-            zip_file.file_name(),
-            zip_file.date_time(),
-            zip_file.compression_method(),
-            zip_file.is_dir()
-        )
-    });
+    pretty_print_zip_files(&zip);
 }
 
 fn print_help() {
