@@ -28,7 +28,7 @@ pub enum ZipFileError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum FileEnvironment {
+pub enum FileEnvironment {
     MsDos = 0,
     Macintosh = 7,
     OSX = 19,
@@ -359,6 +359,10 @@ impl ZipFile {
 
     pub fn uncompressed_size(&self) -> u32 {
         self.uncompressed_size
+    }
+
+    pub fn environment(&self) -> &FileEnvironment {
+        &self.environment
     }
 }
 
