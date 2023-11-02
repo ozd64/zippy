@@ -171,7 +171,7 @@ pub struct ZipFile {
 }
 
 impl FileEnvironment {
-    pub fn from_byte(byte: u8) -> Result<FileEnvironment, FileEnvironmentError> {
+    pub fn from_byte(byte: u8) -> Result<Self, FileEnvironmentError> {
         match byte {
             0 => Ok(FileEnvironment::MsDos),
             3 => Ok(FileEnvironment::Unix),
@@ -186,9 +186,7 @@ impl FileEnvironment {
 }
 
 impl EndOfCentralDirectory {
-    pub fn from_readable<T>(
-        readable: &mut T,
-    ) -> Result<EndOfCentralDirectory, EndOfCentralDirectoryError>
+    pub fn from_readable<T>(readable: &mut T) -> Result<Self, EndOfCentralDirectoryError>
     where
         T: Read + Seek,
     {
@@ -240,7 +238,7 @@ impl EndOfCentralDirectory {
 }
 
 impl ZipFile {
-    pub fn from_readable<T>(readable: &mut T) -> Result<ZipFile, ZipFileError>
+    pub fn from_readable<T>(readable: &mut T) -> Result<Self, ZipFileError>
     where
         T: Read + Seek,
     {

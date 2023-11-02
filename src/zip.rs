@@ -2,7 +2,9 @@ use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{Seek, SeekFrom};
+use std::path::Path;
 
+use crate::archive::{Archive, Extract, ExtractError};
 use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,7 +43,7 @@ pub struct Zip {
 }
 
 impl Zip {
-    pub fn from_file(mut file: File) -> Result<Zip, ZipError> {
+    pub fn from_file(mut file: File) -> Result<Self, ZipError> {
         let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut file)
             .map_err(|err| ZipError::EndOfCentralDirectoryError(err))?;
 
@@ -90,5 +92,19 @@ impl Zip {
 
     pub fn file_count(&self) -> usize {
         self.file_count
+    }
+}
+
+impl Archive for Zip {
+    fn extract_items<P>(&self, extract_path: P) -> Result<usize, ExtractError>
+    where
+        P: AsRef<Path>,
+    {
+        self.zip_files
+            .iter()
+            .map(|zip_item| zip_item.extract(&extract_path))
+            .try_fold(0, |count, zip_extract_result| {
+                zip_extract_result.map(|_| count + 1)
+            })
     }
 }
