@@ -24,15 +24,22 @@ impl Error for ExtractError {}
 
 pub trait Extract {
     //TODO: Consider making ExtractError as trait type
-    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError> where P: AsRef<Path>;
+    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError>
+    where
+        P: AsRef<Path>;
 }
 
 pub trait Archive {
-    fn extract_items<P>(&self, extract_path: P) -> Result<usize, ExtractError> where P: AsRef<Path>;
+    fn extract_items<P>(&self, extract_path: P) -> Result<usize, ExtractError>
+    where
+        P: AsRef<Path>;
 }
 
 impl Extract for ZipFile {
-    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError> where P: AsRef<Path> {
+    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError>
+    where
+        P: AsRef<Path>,
+    {
         todo!()
     }
 }
