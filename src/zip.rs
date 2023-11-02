@@ -102,7 +102,7 @@ impl Archive for Zip {
     {
         self.zip_files
             .iter()
-            .map(|zip_item| zip_item.extract(&extract_path))
+            .map(|zip_item| zip_item.extract(&extract_path, &self.file))
             .try_fold(0, |count, zip_extract_result| {
                 zip_extract_result.map(|_| count + 1)
             })
