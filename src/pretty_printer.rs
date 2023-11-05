@@ -26,12 +26,12 @@ pub fn pretty_print_zip_files(zip: &Zip) {
 
     zip.zip_files().iter().for_each(|zip_file| {
         let first_column_padding =
-            COLUMNS[0].len() - zip_file.uncompressed_size().to_string().len();
+            COLUMNS[0].len() - zip_file.uncompressed_size().get().to_string().len();
 
         println!(
             "{}{}\t{}\t{}\t\t{}",
             String::from_utf8(vec![b' '; first_column_padding]).unwrap(),
-            zip_file.uncompressed_size(),
+            zip_file.uncompressed_size().get(),
             zip_file.date_time(),
             zip_file.environment(),
             zip_file.file_name()

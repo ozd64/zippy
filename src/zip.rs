@@ -69,6 +69,31 @@ impl Zip {
 
         let file_count = ((end_of_central_dir.central_dir_size()) as usize) - dir_count;
 
+        // Update CRC-32, Uncompressed size as well as compressed size in case ZIP file is
+        // configured with Data descriptor
+        let zip_file_offsets: Vec<u32> =
+            zip_files.iter().map(|zip_file| zip_file.offset()).collect();
+
+        zip_files = zip_files
+            .into_iter()
+            .enumerate()
+            .map(|(index, zip_file)| {
+                if zip_file.data_descriptor_used() {
+                    if index == zip_file_offsets.len() - 1 {
+                        zip_file.update_with_data_descriptor(
+                            &mut file,
+                            end_of_central_dir.central_dir_start_offset(),
+                        );
+                    } else {
+                        zip_file
+                            .update_with_data_descriptor(&mut file, zip_file_offsets[index + 1]);
+                    }
+                }
+
+                zip_file
+            })
+            .collect();
+
         Ok(Self {
             file,
             zip_file_count: end_of_central_dir.central_dir_size() as usize,

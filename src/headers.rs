@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian};
+use std::cell::Cell;
 use std::error::Error;
 use std::fmt::Display;
 use std::io::{Read, Seek, SeekFrom};
@@ -9,6 +10,9 @@ const MIN_EOF_CENTRAL_DIR_SIZE: u64 = 0x16;
 const MIN_CENTRAL_DIR_SIZE: u64 = 0x2E;
 const EOF_CENTRAL_DIR_SIGN: u32 = 0x06054b50;
 const CENTRAL_DIR_SIGN: u32 = 0x02014b50;
+const DATA_DESCRIPTOR_SIZE: usize = 12;
+
+const DATA_DESCRIPTOR_READ_FAILURE_EXIT_CODE: i32 = -4;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EndOfCentralDirectoryError {
@@ -163,9 +167,9 @@ pub struct ZipFile {
     //information is kept in data descriptor follewed after local file header
     data_descriptor_used: bool,
     date_time: ZipDateTime,
-    crc32: u32,
-    compressed_size: u32,
-    uncompressed_size: u32,
+    crc32: Cell<u32>,
+    compressed_size: Cell<u32>,
+    uncompressed_size: Cell<u32>,
     file_name: String,
     is_dir: bool,
 }
@@ -331,12 +335,39 @@ impl ZipFile {
             compression_method,
             data_descriptor_used,
             date_time: zip_date_time,
-            crc32,
-            compressed_size,
-            uncompressed_size,
+            crc32: Cell::new(crc32),
+            compressed_size: Cell::new(compressed_size),
+            uncompressed_size: Cell::new(uncompressed_size),
             file_name,
             is_dir,
         })
+    }
+
+    pub fn update_with_data_descriptor<F>(&self, readable: &mut F, descriptor_end_index: u32)
+    where
+        F: Read + Seek,
+    {
+        let mut data_descriptor_bytes = vec![0u8; DATA_DESCRIPTOR_SIZE];
+        let read_result = readable
+            .seek(SeekFrom::Start(
+                (descriptor_end_index - (DATA_DESCRIPTOR_SIZE as u32)) as u64,
+            ))
+            .and_then(|_| readable.read_exact(&mut data_descriptor_bytes));
+
+        if let Err(err) = read_result {
+            eprintln!(
+                "An error occurred while reading data descriptor of the file {}\n{}",
+                self.file_name, err
+            );
+            std::process::exit(DATA_DESCRIPTOR_READ_FAILURE_EXIT_CODE);
+        }
+
+        self.crc32
+            .set(LittleEndian::read_u32(&data_descriptor_bytes[..4]));
+        self.compressed_size
+            .set(LittleEndian::read_u32(&data_descriptor_bytes[4..8]));
+        self.uncompressed_size
+            .set(LittleEndian::read_u32(&data_descriptor_bytes[8..]));
     }
 
     pub fn file_name(&self) -> &String {
@@ -355,12 +386,28 @@ impl ZipFile {
         self.is_dir
     }
 
-    pub fn uncompressed_size(&self) -> u32 {
-        self.uncompressed_size
+    pub fn uncompressed_size(&self) -> &Cell<u32> {
+        &self.uncompressed_size
+    }
+
+    pub fn compressed_size(&self) -> &Cell<u32> {
+        &self.compressed_size
+    }
+
+    pub fn crc32(&self) -> &Cell<u32> {
+        &self.crc32
     }
 
     pub fn environment(&self) -> &FileEnvironment {
         &self.environment
+    }
+
+    pub fn data_descriptor_used(&self) -> bool {
+        self.data_descriptor_used
+    }
+
+    pub fn offset(&self) -> u32 {
+        self.offset
     }
 }
 
@@ -581,14 +628,36 @@ mod tests {
 
         assert_eq!(zip_file.offset, 0x00000000);
         assert_eq!(zip_file.file_name, String::from("cv_debug.log"));
-        assert_eq!(zip_file.crc32, 0xB2D7997D);
-        assert_eq!(zip_file.uncompressed_size, 0x00000130);
-        assert_eq!(zip_file.compressed_size, 0x000000C6);
+        assert_eq!(zip_file.crc32, Cell::new(0xB2D7997D));
+        assert_eq!(zip_file.uncompressed_size, Cell::new(0x00000130));
+        assert_eq!(zip_file.compressed_size, Cell::new(0x000000C6));
         assert_eq!(zip_file.environment, FileEnvironment::Unix);
         assert_eq!(
             zip_file.compression_method,
             CompressionMethod::Deflate(DeflateCompressionMode::Normal)
         );
         assert!(!zip_file.is_dir);
+    }
+
+    #[test]
+    fn test_data_descriptor_update() {
+        let mut cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+        let zip_file = zip_file_result.unwrap();
+
+        let mut data_descriptor_cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00,
+        ]);
+        zip_file.update_with_data_descriptor(&mut data_descriptor_cursor, 12);
+
+        assert_eq!(zip_file.compressed_size().get(), 0x00140314);
+        assert_eq!(zip_file.crc32().get(), 0x02014B50);
+        assert_eq!(zip_file.uncompressed_size().get(), 0x00080000);
     }
 }
