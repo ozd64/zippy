@@ -121,13 +121,13 @@ impl Zip {
 }
 
 impl Archive for Zip {
-    fn extract_items<P>(&self, extract_path: P) -> Result<usize, ExtractError>
+    fn extract_items<P>(&mut self, extract_path: P) -> Result<usize, ExtractError>
     where
         P: AsRef<Path>,
     {
         self.zip_files
             .iter()
-            .map(|zip_item| zip_item.extract(&extract_path, &self.file))
+            .map(|zip_item| zip_item.extract(&extract_path, &mut self.file))
             .try_fold(0, |count, zip_extract_result| {
                 zip_extract_result.map(|_| count + 1)
             })

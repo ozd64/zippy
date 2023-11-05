@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::fs::File;
+use std::io::{Read, Seek};
 use std::path::Path;
 
 use crate::headers::ZipFile;
@@ -24,21 +24,23 @@ impl Error for ExtractError {}
 
 pub trait Extract {
     //TODO: Consider making ExtractError as trait type
-    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError>
+    fn extract<P, F>(&self, extract_path: &P, extract_file: &mut F) -> Result<(), ExtractError>
     where
-        P: AsRef<Path>;
+        P: AsRef<Path>,
+        F: Read + Seek;
 }
 
 pub trait Archive {
-    fn extract_items<P>(&self, extract_path: P) -> Result<usize, ExtractError>
+    fn extract_items<P>(&mut self, extract_path: P) -> Result<usize, ExtractError>
     where
         P: AsRef<Path>;
 }
 
 impl Extract for ZipFile {
-    fn extract<P>(&self, extract_path: &P, extract_file: &File) -> Result<(), ExtractError>
+    fn extract<P, F>(&self, extract_path: &P, extract_file: &mut F) -> Result<(), ExtractError>
     where
         P: AsRef<Path>,
+        F: Read + Seek,
     {
         todo!()
     }
