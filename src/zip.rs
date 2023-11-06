@@ -1,11 +1,11 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::fs::File;
-use std::io::{Seek, SeekFrom};
+use std::io::SeekFrom;
 use std::path::Path;
 
-use crate::archive::{Archive, Extract, ExtractError};
+use crate::archive::{Archive, Extract, ExtractError, ReadableArchive};
 use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
+
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ZipError {
@@ -35,7 +35,7 @@ impl Display for ZipError {
 impl Error for ZipError {}
 
 pub struct Zip {
-    file: File,
+    readable: Box<dyn ReadableArchive>,
     zip_file_count: usize,
     file_count: usize,
     dir_count: usize,
@@ -43,11 +43,11 @@ pub struct Zip {
 }
 
 impl Zip {
-    pub fn from_file(mut file: File) -> Result<Self, ZipError> {
-        let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut file)
+    pub fn from_readable(mut readable: Box<dyn ReadableArchive>) -> Result<Self, ZipError> {
+        let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut readable)
             .map_err(|err| ZipError::EndOfCentralDirectoryError(err))?;
 
-        file.seek(SeekFrom::Start(
+        readable.seek(SeekFrom::Start(
             end_of_central_dir.central_dir_start_offset() as u64,
         ))
         .map_err(|err| ZipError::IOError(err.to_string()))?;
@@ -56,7 +56,7 @@ impl Zip {
             Vec::with_capacity(end_of_central_dir.central_dir_size() as usize);
 
         for _ in 0..end_of_central_dir.central_dir_size() {
-            match ZipFile::from_readable(&mut file) {
+            match ZipFile::from_readable(&mut readable) {
                 Ok(zip_file) => zip_files.push(zip_file),
                 Err(err) => return Err(ZipError::ZipFileError(err)),
             }
@@ -81,12 +81,12 @@ impl Zip {
                 if zip_file.data_descriptor_used() {
                     if index == zip_file_offsets.len() - 1 {
                         zip_file.update_with_data_descriptor(
-                            &mut file,
+                            &mut readable,
                             end_of_central_dir.central_dir_start_offset(),
                         );
                     } else {
                         zip_file
-                            .update_with_data_descriptor(&mut file, zip_file_offsets[index + 1]);
+                            .update_with_data_descriptor(&mut readable, zip_file_offsets[index + 1]);
                     }
                 }
 
@@ -95,7 +95,7 @@ impl Zip {
             .collect();
 
         Ok(Self {
-            file,
+            readable,
             zip_file_count: end_of_central_dir.central_dir_size() as usize,
             zip_files,
             dir_count,
@@ -127,7 +127,7 @@ impl Archive for Zip {
     {
         self.zip_files
             .iter()
-            .map(|zip_item| zip_item.extract(&extract_path, &mut self.file))
+            .map(|zip_item| zip_item.extract(&extract_path, &mut self.readable))
             .try_fold(0, |count, zip_extract_result| {
                 zip_extract_result.map(|_| count + 1)
             })
