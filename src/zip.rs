@@ -3,9 +3,8 @@ use std::fmt::Display;
 use std::io::SeekFrom;
 use std::path::Path;
 
-use crate::archive::{Archive, Extract, ExtractError, ReadableArchive};
+use crate::archive::{Archive, Extract, ExtractError, RefReadableArchive};
 use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
-
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ZipError {
@@ -35,7 +34,7 @@ impl Display for ZipError {
 impl Error for ZipError {}
 
 pub struct Zip {
-    readable: Box<dyn ReadableArchive>,
+    readable: RefReadableArchive,
     zip_file_count: usize,
     file_count: usize,
     dir_count: usize,
@@ -43,14 +42,15 @@ pub struct Zip {
 }
 
 impl Zip {
-    pub fn from_readable(mut readable: Box<dyn ReadableArchive>) -> Result<Self, ZipError> {
+    pub fn from_readable(mut readable: RefReadableArchive) -> Result<Self, ZipError> {
         let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut readable)
             .map_err(|err| ZipError::EndOfCentralDirectoryError(err))?;
 
-        readable.seek(SeekFrom::Start(
-            end_of_central_dir.central_dir_start_offset() as u64,
-        ))
-        .map_err(|err| ZipError::IOError(err.to_string()))?;
+        readable
+            .seek(SeekFrom::Start(
+                end_of_central_dir.central_dir_start_offset() as u64,
+            ))
+            .map_err(|err| ZipError::IOError(err.to_string()))?;
 
         let mut zip_files: Vec<ZipFile> =
             Vec::with_capacity(end_of_central_dir.central_dir_size() as usize);
@@ -85,8 +85,10 @@ impl Zip {
                             end_of_central_dir.central_dir_start_offset(),
                         );
                     } else {
-                        zip_file
-                            .update_with_data_descriptor(&mut readable, zip_file_offsets[index + 1]);
+                        zip_file.update_with_data_descriptor(
+                            &mut readable,
+                            zip_file_offsets[index + 1],
+                        );
                     }
                 }
 

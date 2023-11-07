@@ -11,7 +11,6 @@ const ZIP_FILE_PATH_MISSING_ERROR_RETURN_CODE: i32 = -1;
 const ZIP_FILE_PARSING_ERROR_RETURN_CODE: i32 = -2;
 const UNABLE_TO_OPEN_FILE_ERROR_RETURN_CODE: i32 = -3;
 
-
 fn main() {
     let zip_file_path = args()
         .nth(1)

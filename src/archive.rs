@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::io::{Read, Seek, BufReader};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 use crate::headers::ZipFile;
@@ -8,6 +8,8 @@ use crate::headers::ZipFile;
 pub trait ReadableArchive: Read + Seek {}
 
 impl<T: Read + Seek> ReadableArchive for BufReader<T> {}
+
+pub type RefReadableArchive = Box<dyn ReadableArchive>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExtractError {
@@ -28,7 +30,11 @@ impl Error for ExtractError {}
 
 pub trait Extract {
     //TODO: Consider making ExtractError as trait type
-    fn extract<P>(&self, extract_path: &P, extract_file: &mut Box<dyn ReadableArchive>) -> Result<(), ExtractError>
+    fn extract<P>(
+        &self,
+        extract_path: &P,
+        extract_file: &mut RefReadableArchive,
+    ) -> Result<(), ExtractError>
     where
         P: AsRef<Path>;
 }
@@ -40,8 +46,13 @@ pub trait Archive {
 }
 
 impl Extract for ZipFile {
-    fn extract<P>(&self, extract_path: &P, extract_file: &mut Box<dyn ReadableArchive>) -> Result<(), ExtractError>
-    where P: AsRef<Path>
+    fn extract<P>(
+        &self,
+        extract_path: &P,
+        extract_file: &mut RefReadableArchive,
+    ) -> Result<(), ExtractError>
+    where
+        P: AsRef<Path>,
     {
         todo!()
     }
