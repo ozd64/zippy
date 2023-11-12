@@ -20,8 +20,9 @@ fn main() {
             print_help();
             std::process::exit(ZIP_FILE_PATH_MISSING_ERROR_RETURN_CODE);
         });
-    let parent = zip_file_path.parent().map(|parent_path| PathBuf::from(parent_path));
-
+    let parent = zip_file_path
+        .parent()
+        .map(|parent_path| PathBuf::from(parent_path));
 
     let zip_file = match File::open(zip_file_path) {
         Ok(file) => Box::new(BufReader::new(file)),
@@ -33,7 +34,6 @@ fn main() {
             std::process::exit(UNABLE_TO_OPEN_FILE_ERROR_RETURN_CODE);
         }
     };
-
 
     let mut zip = match Zip::from_readable(zip_file) {
         Ok(zip) => zip,

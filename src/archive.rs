@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, Write, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use byteorder::{ByteOrder, LittleEndian};
@@ -24,7 +24,7 @@ pub enum ExtractError {
     InvalidZipFileParent(PathBuf),
     UnableToCreateExtractedFile(String, String),
     DeflateDecodingError(String),
-    InvalidExtractedFile(u32, u32)
+    InvalidExtractedFile(u32, u32),
 }
 
 impl Display for ExtractError {
@@ -84,14 +84,16 @@ impl Extract for ZipFile {
         // creating the file.
         if let Some(parent_path) = extracted_file_path.parent() {
             if !parent_path.exists() {
-                std::fs::create_dir_all(parent_path).map_err(|err| ExtractError::IOError(err.to_string()))?;
+                std::fs::create_dir_all(parent_path)
+                    .map_err(|err| ExtractError::IOError(err.to_string()))?;
             }
         } else {
             return Err(ExtractError::InvalidZipFileParent(extracted_file_path));
         }
 
-        let mut file = File::create(extracted_file_path.clone())
-            .map_err(|err| ExtractError::UnableToCreateExtractedFile(self.file_name().clone(), err.to_string()))?;
+        let mut file = File::create(extracted_file_path.clone()).map_err(|err| {
+            ExtractError::UnableToCreateExtractedFile(self.file_name().clone(), err.to_string())
+        })?;
         let mut local_file_header_bytes = vec![0u8; MIN_LOCAL_FILE_HEADER_SIZE];
 
         extract_file
@@ -133,7 +135,10 @@ impl Extract for ZipFile {
 
             // If checksums are not matching then quit extracting the file.
             if crc32 != created_file_crc32 {
-                return Err(ExtractError::InvalidExtractedFile(crc32, created_file_crc32));
+                return Err(ExtractError::InvalidExtractedFile(
+                    crc32,
+                    created_file_crc32,
+                ));
             }
         }
 
@@ -156,8 +161,10 @@ where
     Ok(total_bytes_copied)
 }
 
-fn calculate_crc32<P>(file_path: P) -> Result<u32, std::io::Error> where P: AsRef<Path> {
-
+fn calculate_crc32<P>(file_path: P) -> Result<u32, std::io::Error>
+where
+    P: AsRef<Path>,
+{
     let mut extracted_file = File::open(file_path)?;
     let mut buf = vec![0u8; 4096];
     let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
