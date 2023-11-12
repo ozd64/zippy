@@ -79,7 +79,7 @@ impl Zip {
             .enumerate()
             .map(|(index, zip_file)| {
                 if zip_file.data_descriptor_used() {
-                    if index == zip_file_offsets.len() - 1 {
+                    if index == (zip_file_offsets.len() - 1) {
                         zip_file.update_with_data_descriptor(
                             &mut readable,
                             end_of_central_dir.central_dir_start_offset(),

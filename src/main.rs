@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
+use zippy::archive::Archive;
 use zippy::pretty_printer::pretty_print_zip_files;
 use zippy::zip::Zip;
 
@@ -19,6 +20,8 @@ fn main() {
             print_help();
             std::process::exit(ZIP_FILE_PATH_MISSING_ERROR_RETURN_CODE);
         });
+    let parent = zip_file_path.parent().map(|parent_path| PathBuf::from(parent_path));
+
 
     let zip_file = match File::open(zip_file_path) {
         Ok(file) => Box::new(BufReader::new(file)),
@@ -31,7 +34,8 @@ fn main() {
         }
     };
 
-    let zip = match Zip::from_readable(zip_file) {
+
+    let mut zip = match Zip::from_readable(zip_file) {
         Ok(zip) => zip,
         Err(err) => {
             eprintln!("{}", err);
@@ -40,6 +44,7 @@ fn main() {
     };
 
     pretty_print_zip_files(&zip);
+    zip.extract_items(parent.unwrap()).unwrap();
 }
 
 fn print_help() {
