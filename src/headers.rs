@@ -152,6 +152,7 @@ impl Display for CompressionMethod {
     }
 }
 
+#[derive(Debug)]
 pub struct EndOfCentralDirectory {
     central_dir_size: u8,
     central_dir_start_offset: u32,
