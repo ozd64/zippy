@@ -3,8 +3,9 @@ use std::fmt::Display;
 use std::io::SeekFrom;
 use std::path::Path;
 
-use crate::archive::{Archive, Extract, ExtractError, RefReadableArchive};
+use crate::archive::{Archive, Extract, ExtractError};
 use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
+use crate::RefReadableArchive;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ZipError {

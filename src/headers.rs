@@ -411,6 +411,10 @@ impl ZipFile {
     pub fn offset(&self) -> u32 {
         self.offset
     }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.is_encrypted
+    }
 }
 
 #[cfg(test)]

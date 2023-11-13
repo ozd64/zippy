@@ -9,6 +9,7 @@ use crc::{Crc, CRC_32_ISO_HDLC};
 use flate2::read::DeflateDecoder;
 
 use crate::headers::{CompressionMethod, ZipFile};
+use crate::{Crc32, RefReadableArchive};
 
 const MIN_LOCAL_FILE_HEADER_SIZE: usize = 30;
 const FILE_READ_WRITE_BUFFER_SIZE: usize = 4096;
@@ -16,9 +17,6 @@ const FILE_READ_WRITE_BUFFER_SIZE: usize = 4096;
 pub trait ReadableArchive: Read + Seek {}
 
 impl<T: Read + Seek> ReadableArchive for BufReader<T> {}
-
-pub type RefReadableArchive = Box<dyn ReadableArchive>;
-type Crc32 = u32;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExtractError {
