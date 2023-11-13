@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt::Display;
 use std::io::Read;
 
 use crate::Crc32;
@@ -41,40 +43,56 @@ const PRE_CALCULATED_CRC_TABLE: [Crc32; 256] = [
     0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94, 0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
 ];
 
+#[derive(Debug)]
+pub enum ZipCryptoError {
+    InvalidPassword,
+    IOError(std::io::Error),
+}
+
+impl Display for ZipCryptoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZipCryptoError::InvalidPassword => write!(f, "Incorrect password"),
+            ZipCryptoError::IOError(err) => write!(
+                f,
+                "An I/O error occurred while setting up Zip crypto.\n {}",
+                err
+            ),
+        }
+    }
+}
+
+impl Error for ZipCryptoError {}
+
 pub struct ZipCryptoReader<R: Read> {
     reader: R,
+    zip_crypto: ZipCrypto,
+}
+
+struct ZipCrypto {
     key0: u32,
     key1: u32,
     key2: u32,
 }
 
-impl<R: Read> ZipCryptoReader<R> {
-    pub fn new(password: String, reader: R) -> Self {
-        let mut key0 = PKZIP_KEY0_DEFAULT_VALUE;
-        let mut key1 = PKZIP_KEY1_DEFAULT_VALUE;
-        let mut key2 = PKZIP_KEY2_DEFAULT_VALUE;
-
-        password.bytes().for_each(|byte| {
-            ZipCryptoReader::<R>::update_keys(&mut key0, &mut key1, &mut key2, byte)
-        });
-
+impl ZipCrypto {
+    pub fn new() -> Self {
         Self {
-            reader,
-            key0,
-            key1,
-            key2,
+            key0: PKZIP_KEY0_DEFAULT_VALUE,
+            key1: PKZIP_KEY1_DEFAULT_VALUE,
+            key2: PKZIP_KEY2_DEFAULT_VALUE,
         }
     }
 
-    fn update_keys(key0: &mut u32, key1: &mut u32, key2: &mut u32, byte: u8) {
-        *key0 = ZipCryptoReader::<R>::calculate_crc32(*key0, byte);
-        *key1 = (key1.wrapping_add(*key0 & 0xFF))
+    pub fn update_keys(&mut self, byte: u8) {
+        self.key0 = self.calculate_crc32(self.key0, byte);
+        self.key1 = (self.key1.wrapping_add(self.key0 & 0xFF))
             .wrapping_mul(0x08088405)
             .wrapping_add(1);
-        *key2 = ZipCryptoReader::<R>::calculate_crc32(*key2, (*key1 >> 24) as u8);
+        self.key2 = self.calculate_crc32(self.key2, (self.key1 >> 24) as u8);
     }
 
-    fn calculate_crc32(crc32: Crc32, byte: u8) -> Crc32 {
+    fn calculate_crc32(&self, crc32: Crc32, byte: u8) -> Crc32 {
         (crc32 >> 8) ^ PRE_CALCULATED_CRC_TABLE[((crc32 & 0xFF) ^ ((byte) as u32)) as usize]
     }
 
@@ -84,11 +102,40 @@ impl<R: Read> ZipCryptoReader<R> {
         ((temp.wrapping_mul(temp ^ 1)) >> 8) as u8
     }
 
-    fn process_byte(&mut self, byte: u8) -> u8 {
+    pub fn process_byte(&mut self, byte: u8) -> u8 {
         let cipher_byte = self.stream_byte() ^ byte;
-        ZipCryptoReader::<R>::update_keys(&mut self.key0, &mut self.key1, &mut self.key2, byte);
+        self.update_keys(byte);
 
         cipher_byte
+    }
+}
+
+impl<R: Read> ZipCryptoReader<R> {
+    pub fn new(password: String, file_crc32: Crc32, mut reader: R) -> Result<Self, ZipCryptoError> {
+        let mut zip_crypto = ZipCrypto::new();
+
+        password.bytes().for_each(|byte| {
+            zip_crypto.update_keys(byte);
+        });
+
+        let mut random_bytes = vec![0u8; 12];
+        reader
+            .read_exact(&mut random_bytes)
+            .map_err(|err| ZipCryptoError::IOError(err))?;
+
+        random_bytes
+            .iter_mut()
+            .for_each(|byte| *byte = zip_crypto.process_byte(*byte));
+
+        let crc32_high_order_byte = (file_crc32 & 0x00_00_00_FF) as u8;
+
+        // The last byte of the first random 12 bytes should be the same as the high order byte of
+        // file CRC-32. If they don't match then the entered password is incorrect!
+        if crc32_high_order_byte != random_bytes[11] {
+            return Err(ZipCryptoError::InvalidPassword);
+        }
+
+        Ok(Self { reader, zip_crypto })
     }
 }
 
@@ -98,7 +145,7 @@ impl<R: Read> Read for ZipCryptoReader<R> {
 
         let _ = &buf[..read_bytes]
             .iter_mut()
-            .for_each(|byte| *byte = self.process_byte(*byte));
+            .for_each(|byte| *byte = self.zip_crypto.process_byte(*byte));
 
         Ok(read_bytes)
     }
