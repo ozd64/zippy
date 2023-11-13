@@ -11,12 +11,14 @@ use flate2::read::DeflateDecoder;
 use crate::headers::{CompressionMethod, ZipFile};
 
 const MIN_LOCAL_FILE_HEADER_SIZE: usize = 30;
+const FILE_READ_WRITE_BUFFER_SIZE: usize = 4096;
 
 pub trait ReadableArchive: Read + Seek {}
 
 impl<T: Read + Seek> ReadableArchive for BufReader<T> {}
 
 pub type RefReadableArchive = Box<dyn ReadableArchive>;
+type Crc32 = u32;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ExtractError {
@@ -119,19 +121,23 @@ impl Extract for ZipFile {
         };
 
         //Decode the file
-        match self.compression_method() {
-            CompressionMethod::NoCompression => std::io::copy(&mut file_data_reader, &mut file)
-                .map_err(|err| ExtractError::IOError(err.to_string()))?,
+        let created_file_crc32 = match self.compression_method() {
+            CompressionMethod::NoCompression => {
+                //If no compression is set then just copy the file bytes into destination and
+                //calculate CRC-32
+                std::io::copy(&mut file_data_reader, &mut file)
+                    .map_err(|err| ExtractError::IOError(err.to_string()))?;
+                calculate_crc32(extracted_file_path)
+                    .map_err(|err| ExtractError::IOError(err.to_string()))?
+            }
             CompressionMethod::Deflate(_) => {
-                decode_and_write_compressed_data(&mut file, &mut file_data_reader)?
+                decode_and_write_deflated_compressed_data(&mut file_data_reader, &mut file)?
             }
         };
 
         //If we extract a file then make sure that CRC-32 checksums are matching
         if !self.is_dir() {
             let crc32 = self.crc32().get();
-            let created_file_crc32 = calculate_crc32(extracted_file_path)
-                .map_err(|err| ExtractError::IOError(err.to_string()))?;
 
             // If checksums are not matching then quit extracting the file.
             if crc32 != created_file_crc32 {
@@ -146,27 +152,44 @@ impl Extract for ZipFile {
     }
 }
 
-fn decode_and_write_compressed_data<'a, W, R>(
-    writer: &mut W,
+fn decode_and_write_deflated_compressed_data<R, W>(
     reader: &mut R,
-) -> Result<u64, ExtractError>
+    writer: &mut W,
+) -> Result<Crc32, ExtractError>
 where
-    W: Write,
     R: Read,
+    W: Write,
 {
     let mut deflate_decoder = DeflateDecoder::new(reader);
-    let total_bytes_copied = std::io::copy(&mut deflate_decoder, writer)
-        .map_err(|err| ExtractError::DeflateDecodingError(err.to_string()))?;
+    let mut buf = vec![0u8; FILE_READ_WRITE_BUFFER_SIZE];
+    let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+    let mut digest = crc.digest();
 
-    Ok(total_bytes_copied)
+    loop {
+        let read_bytes = deflate_decoder
+            .read(&mut buf)
+            .map_err(|err| ExtractError::DeflateDecodingError(err.to_string()))?;
+
+        if read_bytes == 0 {
+            break;
+        }
+        let read_bytes_buf = &buf[..read_bytes];
+
+        writer
+            .write_all(read_bytes_buf)
+            .map_err(|err| ExtractError::IOError(err.to_string()))?;
+        digest.update(read_bytes_buf);
+    }
+
+    Ok(digest.finalize())
 }
 
-fn calculate_crc32<P>(file_path: P) -> Result<u32, std::io::Error>
+fn calculate_crc32<P>(file_path: P) -> Result<Crc32, std::io::Error>
 where
     P: AsRef<Path>,
 {
     let mut extracted_file = File::open(file_path)?;
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; FILE_READ_WRITE_BUFFER_SIZE];
     let crc = Crc::<u32>::new(&CRC_32_ISO_HDLC);
     let mut digest = crc.digest();
 
