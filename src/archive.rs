@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write, BufRead};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use byteorder::{ByteOrder, LittleEndian};

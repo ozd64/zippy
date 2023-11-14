@@ -262,7 +262,7 @@ impl ZipFile {
         let zip_version = central_dir_bytes[0x04];
 
         // We currently only support ZIP 2.0 and 3.0
-        let supported_zip_versions = vec![0x14, 0x1E];
+        let supported_zip_versions = vec![0x14, 0x1E, 0x3F];
 
         if !supported_zip_versions.contains(&zip_version) {
             return Err(ZipFileError::UnsupportedZipVersion(zip_version));

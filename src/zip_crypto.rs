@@ -8,6 +8,154 @@ const PKZIP_KEY0_DEFAULT_VALUE: u32 = 0x12345678;
 const PKZIP_KEY1_DEFAULT_VALUE: u32 = 0x23456789;
 const PKZIP_KEY2_DEFAULT_VALUE: u32 = 0x34567890;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ZipCryptoError {
+    IncorrectPassword,
+    IOError(String),
+}
+
+impl Display for ZipCryptoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZipCryptoError::IncorrectPassword => write!(f, "Incorrect password"),
+            ZipCryptoError::IOError(err) => write!(
+                f,
+                "An I/O error occurred while setting up Zip crypto.\n {}",
+                err
+            ),
+        }
+    }
+}
+
+impl Error for ZipCryptoError {}
+
+#[derive(Debug)]
+pub struct ZipCryptoReader<R: Read> {
+    reader: R,
+    zip_crypto: ZipCrypto,
+}
+
+#[derive(Debug)]
+struct ZipCrypto {
+    key0: u32,
+    key1: u32,
+    key2: u32,
+}
+
+impl ZipCrypto {
+    pub fn new() -> Self {
+        Self {
+            key0: PKZIP_KEY0_DEFAULT_VALUE,
+            key1: PKZIP_KEY1_DEFAULT_VALUE,
+            key2: PKZIP_KEY2_DEFAULT_VALUE,
+        }
+    }
+
+    pub fn update_keys(&mut self, byte: u8) {
+        self.key0 = self.calculate_crc32(self.key0, byte);
+        self.key1 = (self.key1.wrapping_add(self.key0 & 0xFF))
+            .wrapping_mul(0x08088405)
+            .wrapping_add(1);
+        self.key2 = self.calculate_crc32(self.key2, (self.key1 >> 24) as u8);
+    }
+
+    fn calculate_crc32(&self, crc32: Crc32, byte: u8) -> Crc32 {
+        (crc32 >> 8) ^ PRE_CALCULATED_CRC_TABLE[((crc32 & 0xFF) as u8 ^ byte) as usize]
+    }
+
+    fn stream_byte(&self) -> u8 {
+        let temp = (self.key2 as u16) | 3;
+
+        ((temp.wrapping_mul(temp ^ 1)) >> 8) as u8
+    }
+
+    pub fn process_byte(&mut self, byte: u8) -> u8 {
+        let cipher_byte = self.stream_byte() ^ byte;
+        self.update_keys(cipher_byte);
+
+        cipher_byte
+    }
+}
+
+impl<R: Read> ZipCryptoReader<R> {
+    pub fn new(password: String, file_crc32: Crc32, mut reader: R) -> Result<Self, ZipCryptoError> {
+        let mut zip_crypto = ZipCrypto::new();
+
+        password.bytes().for_each(|byte| {
+            zip_crypto.update_keys(byte);
+        });
+
+        let mut random_bytes = vec![0u8; 12];
+        reader
+            .read_exact(&mut random_bytes)
+            .map_err(|err| ZipCryptoError::IOError(err.to_string()))?;
+
+        random_bytes
+            .iter_mut()
+            .for_each(|byte| *byte = zip_crypto.process_byte(*byte));
+
+        let crc32_high_order_byte = (file_crc32 >> 24) as u8;
+
+        // The last byte of the first random 12 bytes should be the same as the high order byte of
+        // file CRC-32. If they don't match then the entered password is incorrect!
+        if crc32_high_order_byte != random_bytes[11] {
+            return Err(ZipCryptoError::IncorrectPassword);
+        }
+
+        Ok(Self { reader, zip_crypto })
+    }
+}
+
+impl<R: Read> Read for ZipCryptoReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read_bytes = self.reader.read(buf)?;
+
+        let _ = &buf[..read_bytes]
+            .iter_mut()
+            .for_each(|byte| *byte = self.zip_crypto.process_byte(*byte));
+
+        Ok(read_bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_correct_password() {
+        let password = "test".to_string();
+        let file_crc32 = 0x5579202F;
+        let encryption_bytes = vec![
+            0xCA, 0x2D, 0x1D, 0x27, 0x19, 0x19, 0x63, 0x43, 0x77, 0x9A, 0x71, 0x76,
+        ];
+        let cursor = Cursor::new(encryption_bytes);
+
+        let zip_crypto_reader_result = ZipCryptoReader::new(password, file_crc32, cursor);
+
+        assert!(zip_crypto_reader_result.is_ok());
+    }
+
+    #[test]
+    fn test_incorrect_password() {
+        let password = "wrong_password".to_string();
+        let file_crc32 = 0x5579202F;
+        let encryption_bytes = vec![
+            0xCA, 0x2D, 0x1D, 0x27, 0x19, 0x19, 0x63, 0x43, 0x77, 0x9A, 0x71, 0x76,
+        ];
+        let cursor = Cursor::new(encryption_bytes);
+
+        let zip_crypto_reader_err_result =
+            ZipCryptoReader::new(password, file_crc32, cursor).unwrap_err();
+
+        assert_eq!(
+            zip_crypto_reader_err_result,
+            ZipCryptoError::IncorrectPassword
+        );
+    }
+}
+
 const PRE_CALCULATED_CRC_TABLE: [Crc32; 256] = [
     0x00000000, 0x77073096, 0xEE0E612C, 0x990951BA, 0x076DC419, 0x706AF48F, 0xE963A535, 0x9E6495A3,
     0x0EDB8832, 0x79DCB8A4, 0xE0D5E91E, 0x97D2D988, 0x09B64C2B, 0x7EB17CBD, 0xE7B82D07, 0x90BF1D91,
@@ -42,111 +190,3 @@ const PRE_CALCULATED_CRC_TABLE: [Crc32; 256] = [
     0xBDBDF21C, 0xCABAC28A, 0x53B39330, 0x24B4A3A6, 0xBAD03605, 0xCDD70693, 0x54DE5729, 0x23D967BF,
     0xB3667A2E, 0xC4614AB8, 0x5D681B02, 0x2A6F2B94, 0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
 ];
-
-#[derive(Debug)]
-pub enum ZipCryptoError {
-    InvalidPassword,
-    IOError(String),
-}
-
-impl Display for ZipCryptoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ZipCryptoError::InvalidPassword => write!(f, "Incorrect password"),
-            ZipCryptoError::IOError(err) => write!(
-                f,
-                "An I/O error occurred while setting up Zip crypto.\n {}",
-                err
-            ),
-        }
-    }
-}
-
-impl Error for ZipCryptoError {}
-
-pub struct ZipCryptoReader<R: Read> {
-    reader: R,
-    zip_crypto: ZipCrypto,
-}
-
-struct ZipCrypto {
-    key0: u32,
-    key1: u32,
-    key2: u32,
-}
-
-impl ZipCrypto {
-    pub fn new() -> Self {
-        Self {
-            key0: PKZIP_KEY0_DEFAULT_VALUE,
-            key1: PKZIP_KEY1_DEFAULT_VALUE,
-            key2: PKZIP_KEY2_DEFAULT_VALUE,
-        }
-    }
-
-    pub fn update_keys(&mut self, byte: u8) {
-        self.key0 = self.calculate_crc32(self.key0, byte);
-        self.key1 = (self.key1.wrapping_add(self.key0 & 0xFF))
-            .wrapping_mul(0x08088405)
-            .wrapping_add(1);
-        self.key2 = self.calculate_crc32(self.key2, (self.key1 >> 24) as u8);
-    }
-
-    fn calculate_crc32(&self, crc32: Crc32, byte: u8) -> Crc32 {
-        (crc32 >> 8) ^ PRE_CALCULATED_CRC_TABLE[((crc32 & 0xFF) ^ ((byte) as u32)) as usize]
-    }
-
-    fn stream_byte(&self) -> u8 {
-        let temp = (self.key2 | 3) as u16;
-
-        ((temp.wrapping_mul(temp ^ 1)) >> 8) as u8
-    }
-
-    pub fn process_byte(&mut self, byte: u8) -> u8 {
-        let cipher_byte = self.stream_byte() ^ byte;
-        self.update_keys(byte);
-
-        cipher_byte
-    }
-}
-
-impl<R: Read> ZipCryptoReader<R> {
-    pub fn new(password: String, file_crc32: Crc32, mut reader: R) -> Result<Self, ZipCryptoError> {
-        let mut zip_crypto = ZipCrypto::new();
-
-        password.bytes().for_each(|byte| {
-            zip_crypto.update_keys(byte);
-        });
-
-        let mut random_bytes = vec![0u8; 12];
-        reader
-            .read_exact(&mut random_bytes)
-            .map_err(|err| ZipCryptoError::IOError(err.to_string()))?;
-
-        random_bytes
-            .iter_mut()
-            .for_each(|byte| *byte = zip_crypto.process_byte(*byte));
-
-        let crc32_high_order_byte = (file_crc32 >> 24) as u8;
-
-        // The last byte of the first random 12 bytes should be the same as the high order byte of
-        // file CRC-32. If they don't match then the entered password is incorrect!
-        if crc32_high_order_byte != random_bytes[11] {
-            return Err(ZipCryptoError::InvalidPassword);
-        }
-
-        Ok(Self { reader, zip_crypto })
-    }
-}
-
-impl<R: Read> Read for ZipCryptoReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read_bytes = self.reader.read(buf)?;
-
-        let _ = &buf[..read_bytes]
-            .iter_mut()
-            .for_each(|byte| *byte = self.zip_crypto.process_byte(*byte));
-
-        Ok(read_bytes)
-    }
-}
