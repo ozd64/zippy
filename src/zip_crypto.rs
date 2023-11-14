@@ -46,7 +46,7 @@ const PRE_CALCULATED_CRC_TABLE: [Crc32; 256] = [
 #[derive(Debug)]
 pub enum ZipCryptoError {
     InvalidPassword,
-    IOError(std::io::Error),
+    IOError(String),
 }
 
 impl Display for ZipCryptoError {
@@ -121,13 +121,13 @@ impl<R: Read> ZipCryptoReader<R> {
         let mut random_bytes = vec![0u8; 12];
         reader
             .read_exact(&mut random_bytes)
-            .map_err(|err| ZipCryptoError::IOError(err))?;
+            .map_err(|err| ZipCryptoError::IOError(err.to_string()))?;
 
         random_bytes
             .iter_mut()
             .for_each(|byte| *byte = zip_crypto.process_byte(*byte));
 
-        let crc32_high_order_byte = (file_crc32 & 0x00_00_00_FF) as u8;
+        let crc32_high_order_byte = (file_crc32 >> 24) as u8;
 
         // The last byte of the first random 12 bytes should be the same as the high order byte of
         // file CRC-32. If they don't match then the entered password is incorrect!

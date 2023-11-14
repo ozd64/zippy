@@ -1,12 +1,12 @@
 use std::error::Error;
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write, BufRead};
 use std::path::{Path, PathBuf};
 
 use byteorder::{ByteOrder, LittleEndian};
 use crc::{Crc, CRC_32_ISO_HDLC};
-use flate2::read::DeflateDecoder;
+use flate2::bufread::DeflateDecoder;
 
 use crate::headers::{CompressionMethod, ZipFile};
 use crate::{Crc32, RefReadableArchive};
@@ -14,7 +14,7 @@ use crate::{Crc32, RefReadableArchive};
 const MIN_LOCAL_FILE_HEADER_SIZE: usize = 30;
 const FILE_READ_WRITE_BUFFER_SIZE: usize = 4096;
 
-pub trait ReadableArchive: Read + Seek {}
+pub trait ReadableArchive: BufRead + Seek {}
 
 impl<T: Read + Seek> ReadableArchive for BufReader<T> {}
 
@@ -155,7 +155,7 @@ fn decode_and_write_deflated_compressed_data<R, W>(
     writer: &mut W,
 ) -> Result<Crc32, ExtractError>
 where
-    R: Read,
+    R: BufRead,
     W: Write,
 {
     let mut deflate_decoder = DeflateDecoder::new(reader);

@@ -7,7 +7,7 @@ use crate::archive::{Archive, Extract, ExtractError};
 use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
 use crate::RefReadableArchive;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ZipError {
     EndOfCentralDirectoryError(EndOfCentralDirectoryError),
     ZipFileError(ZipFileError),
