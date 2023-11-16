@@ -3,9 +3,10 @@ use std::fmt::Display;
 use std::io::SeekFrom;
 use std::path::Path;
 
-use crate::archive::{Archive, Extract, ExtractError};
-use crate::headers::{EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError};
-use crate::RefReadableArchive;
+use crate::archive::{Archive, Extract, ExtractError, ReadableArchive};
+use crate::headers::{
+    EncryptionMethod, EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError,
+};
 
 #[derive(Debug)]
 pub enum ZipError {
@@ -34,16 +35,17 @@ impl Display for ZipError {
 
 impl Error for ZipError {}
 
-pub struct Zip {
-    readable: RefReadableArchive,
+pub struct Zip<R: ReadableArchive> {
+    readable: R,
     zip_file_count: usize,
     file_count: usize,
     dir_count: usize,
+    files_encrypted: bool,
     zip_files: Vec<ZipFile>,
 }
 
-impl Zip {
-    pub fn from_readable(mut readable: RefReadableArchive) -> Result<Self, ZipError> {
+impl<R: ReadableArchive> Zip<R> {
+    pub fn from_readable(mut readable: R) -> Result<Self, ZipError> {
         let end_of_central_dir = EndOfCentralDirectory::from_readable(&mut readable)
             .map_err(|err| ZipError::EndOfCentralDirectoryError(err))?;
 
@@ -97,11 +99,16 @@ impl Zip {
             })
             .collect();
 
+        let files_encrypted = zip_files
+            .iter()
+            .any(|zip_file| zip_file.encryption_method() != &EncryptionMethod::NoEncryption);
+
         Ok(Self {
             readable,
             zip_file_count: end_of_central_dir.central_dir_size() as usize,
             zip_files,
             dir_count,
+            files_encrypted,
             file_count,
         })
     }
@@ -121,16 +128,24 @@ impl Zip {
     pub fn file_count(&self) -> usize {
         self.file_count
     }
+
+    pub fn files_encrypted(&self) -> bool {
+        self.files_encrypted
+    }
 }
 
-impl Archive for Zip {
-    fn extract_items<P>(&mut self, extract_path: P) -> Result<usize, ExtractError>
+impl<R: ReadableArchive> Archive for Zip<R> {
+    fn extract_items<P>(
+        &mut self,
+        extract_path: P,
+        password: Option<String>,
+    ) -> Result<usize, ExtractError>
     where
         P: AsRef<Path>,
     {
         self.zip_files
             .iter()
-            .map(|zip_item| zip_item.extract(&extract_path, &mut self.readable))
+            .map(|zip_item| zip_item.extract(&extract_path, &mut self.readable, &password))
             .try_fold(0, |count, zip_extract_result| {
                 zip_extract_result.map(|_| count + 1)
             })

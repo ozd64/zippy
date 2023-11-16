@@ -25,7 +25,7 @@ fn main() {
         .map(|parent_path| PathBuf::from(parent_path));
 
     let zip_file = match File::open(zip_file_path) {
-        Ok(file) => Box::new(BufReader::new(file)),
+        Ok(file) => BufReader::new(file),
         Err(err) => {
             eprintln!(
                 "An error occurred while trying to open the input file.\n\"{}\"",
@@ -44,7 +44,8 @@ fn main() {
     };
 
     pretty_print_zip_files(&zip);
-    zip.extract_items(parent.unwrap()).unwrap();
+    let password = None;
+    zip.extract_items(parent.unwrap(), password).unwrap();
 }
 
 fn print_help() {

@@ -1,8 +1,11 @@
-use crate::zip::Zip;
+use crate::{archive::ReadableArchive, zip::Zip};
 
 const COLUMNS: [&'static str; 4] = ["Size (Bytes)", "Date Time", "Environment", "Name"];
 
-pub fn pretty_print_zip_files(zip: &Zip) {
+pub fn pretty_print_zip_files<R>(zip: &Zip<R>)
+where
+    R: ReadableArchive,
+{
     println!(
         "\nFile Count: {}, Directory Count: {}\n",
         zip.file_count(),

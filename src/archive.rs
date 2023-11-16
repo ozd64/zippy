@@ -8,8 +8,9 @@ use byteorder::{ByteOrder, LittleEndian};
 use crc::{Crc, CRC_32_ISO_HDLC};
 use flate2::bufread::DeflateDecoder;
 
-use crate::headers::{CompressionMethod, ZipFile};
-use crate::{Crc32, RefReadableArchive};
+use crate::headers::{CompressionMethod, EncryptionMethod, ZipFile};
+use crate::zip_crypto::{ZipCryptoError, ZipCryptoReader, ZIP_CRYPTO_RANDOM_BYTES_LEN};
+use crate::Crc32;
 
 const MIN_LOCAL_FILE_HEADER_SIZE: usize = 30;
 const FILE_READ_WRITE_BUFFER_SIZE: usize = 4096;
@@ -25,6 +26,8 @@ pub enum ExtractError {
     UnableToCreateExtractedFile(String, String),
     DeflateDecodingError(String),
     InvalidExtractedFile(u32, u32),
+    UnsupportedEncryption(EncryptionMethod),
+    ZipCryptoError(ZipCryptoError),
 }
 
 impl Display for ExtractError {
@@ -36,7 +39,9 @@ impl Display for ExtractError {
             ExtractError::InvalidZipFileParent(parent_path) => write!(f, "Invalid parent path for the zip file. Invalid parent path: {}", parent_path.as_path().display().to_string()),
             ExtractError::UnableToCreateExtractedFile(file_name, error_msg) => write!(f, "Unable to create the extracted file \"{}\".\nError: {}", file_name, error_msg),
             ExtractError::DeflateDecodingError(error_msg) => write!(f, "Unable to decode the deflated stream. {}", error_msg),
-            ExtractError::InvalidExtractedFile(crc32, extracted_file_crc32) => write!(f, "Extracted file corruption. CRC-32 checksums are not matching. File CRC-32: 0x{:X}, Extracted file CRC-32: 0x{:X}", crc32, extracted_file_crc32)
+            ExtractError::InvalidExtractedFile(crc32, extracted_file_crc32) => write!(f, "Extracted file corruption. CRC-32 checksums are not matching. File CRC-32: 0x{:X}, Extracted file CRC-32: 0x{:X}", crc32, extracted_file_crc32),
+            ExtractError::UnsupportedEncryption(encryption_method) => write!(f, "Unsupported encryption method set for the zip file. Read Encryption method: {}", encryption_method),
+            ExtractError::ZipCryptoError(err) => write!(f, "Zip Crypto error!\n{}", err),
         }
     }
 }
@@ -45,29 +50,37 @@ impl Error for ExtractError {}
 
 pub trait Extract {
     //TODO: Consider making ExtractError as trait type
-    fn extract<P>(
+    fn extract<P, R>(
         &self,
         extract_path: &P,
-        extract_file: &mut RefReadableArchive,
+        extract_file: &mut R,
+        password: &Option<String>,
     ) -> Result<(), ExtractError>
     where
-        P: AsRef<Path>;
+        P: AsRef<Path>,
+        R: ReadableArchive;
 }
 
 pub trait Archive {
-    fn extract_items<P>(&mut self, extract_path: P) -> Result<usize, ExtractError>
+    fn extract_items<P>(
+        &mut self,
+        extract_path: P,
+        password: Option<String>,
+    ) -> Result<usize, ExtractError>
     where
         P: AsRef<Path>;
 }
 
 impl Extract for ZipFile {
-    fn extract<P>(
+    fn extract<P, R>(
         &self,
         extract_path: &P,
-        extract_file: &mut RefReadableArchive,
+        extract_file: &mut R,
+        password: &Option<String>,
     ) -> Result<(), ExtractError>
     where
         P: AsRef<Path>,
+        R: ReadableArchive,
     {
         let mut extracted_file_path = PathBuf::new();
 
@@ -111,11 +124,43 @@ impl Extract for ZipFile {
             .seek(SeekFrom::Current(file_bytes_start_offset as i64))
             .map_err(|err| ExtractError::IOError(err.to_string()))?;
 
-        let mut file_data_reader = if self.compression_method() == &CompressionMethod::NoCompression
-        {
-            extract_file.take(self.uncompressed_size().get() as u64)
-        } else {
-            extract_file.take(self.compressed_size().get() as u64)
+        // Zip Crypto appends extra 12 bytes at the beginning of the file stream so we should also
+        // include those into our "take" consideration
+        let extra_encryption_len = match self.encryption_method() {
+            EncryptionMethod::NoEncryption => 0,
+            EncryptionMethod::ZipCrypto => ZIP_CRYPTO_RANDOM_BYTES_LEN as u64,
+            EncryptionMethod::Aes => {
+                return Err(ExtractError::UnsupportedEncryption(EncryptionMethod::Aes))
+            }
+        };
+
+        let mut file_data_reader =
+            if let CompressionMethod::NoCompression = self.compression_method() {
+                extract_file.take((self.uncompressed_size().get() as u64) + extra_encryption_len)
+            } else {
+                extract_file.take(self.compressed_size().get() as u64 + extra_encryption_len)
+            };
+        let mut zip_crypto_reader;
+
+        let mut file_reader_by_encryption: &mut dyn BufRead = match self.encryption_method() {
+            EncryptionMethod::NoEncryption => &mut file_data_reader,
+            EncryptionMethod::ZipCrypto => {
+                let password = match password {
+                    Some(pass) => pass.clone(),
+                    None => {
+                        return Err(ExtractError::ZipCryptoError(ZipCryptoError::EmptyPassword))
+                    }
+                };
+
+                zip_crypto_reader =
+                    ZipCryptoReader::new(password, self.crc32().get(), file_data_reader)
+                        .map_err(|err| ExtractError::ZipCryptoError(err))?;
+
+                &mut zip_crypto_reader
+            }
+            EncryptionMethod::Aes => {
+                return Err(ExtractError::UnsupportedEncryption(EncryptionMethod::Aes))
+            }
         };
 
         //Decode the file
@@ -123,14 +168,15 @@ impl Extract for ZipFile {
             CompressionMethod::NoCompression => {
                 //If no compression is set then just copy the file bytes into destination and
                 //calculate CRC-32
-                std::io::copy(&mut file_data_reader, &mut file)
+                std::io::copy(&mut file_reader_by_encryption, &mut file)
                     .map_err(|err| ExtractError::IOError(err.to_string()))?;
                 calculate_crc32(extracted_file_path)
                     .map_err(|err| ExtractError::IOError(err.to_string()))?
             }
-            CompressionMethod::Deflate(_) => {
-                decode_and_write_deflated_compressed_data(&mut file_data_reader, &mut file)?
-            }
+            CompressionMethod::Deflate(_) => decode_and_write_deflated_compressed_data(
+                &mut file_reader_by_encryption,
+                &mut file,
+            )?,
         };
 
         //If we extract a file then make sure that CRC-32 checksums are matching

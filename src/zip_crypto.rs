@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt::Display;
-use std::io::Read;
+use std::io::{BufRead, Read};
 
 use crate::Crc32;
 
@@ -8,10 +8,13 @@ const PKZIP_KEY0_DEFAULT_VALUE: u32 = 0x12345678;
 const PKZIP_KEY1_DEFAULT_VALUE: u32 = 0x23456789;
 const PKZIP_KEY2_DEFAULT_VALUE: u32 = 0x34567890;
 
+pub const ZIP_CRYPTO_RANDOM_BYTES_LEN: usize = 12;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ZipCryptoError {
     IncorrectPassword,
     IOError(String),
+    EmptyPassword,
 }
 
 impl Display for ZipCryptoError {
@@ -23,6 +26,7 @@ impl Display for ZipCryptoError {
                 "An I/O error occurred while setting up Zip crypto.\n {}",
                 err
             ),
+            ZipCryptoError::EmptyPassword => write!(f, "Empty password given for Zip Crypto"),
         }
     }
 }
@@ -30,7 +34,7 @@ impl Display for ZipCryptoError {
 impl Error for ZipCryptoError {}
 
 #[derive(Debug)]
-pub struct ZipCryptoReader<R: Read> {
+pub struct ZipCryptoReader<R: BufRead> {
     reader: R,
     zip_crypto: ZipCrypto,
 }
@@ -77,7 +81,7 @@ impl ZipCrypto {
     }
 }
 
-impl<R: Read> ZipCryptoReader<R> {
+impl<R: BufRead> ZipCryptoReader<R> {
     pub fn new(password: String, file_crc32: Crc32, mut reader: R) -> Result<Self, ZipCryptoError> {
         let mut zip_crypto = ZipCrypto::new();
 
@@ -85,7 +89,7 @@ impl<R: Read> ZipCryptoReader<R> {
             zip_crypto.update_keys(byte);
         });
 
-        let mut random_bytes = vec![0u8; 12];
+        let mut random_bytes = vec![0u8; ZIP_CRYPTO_RANDOM_BYTES_LEN];
         reader
             .read_exact(&mut random_bytes)
             .map_err(|err| ZipCryptoError::IOError(err.to_string()))?;
@@ -106,7 +110,7 @@ impl<R: Read> ZipCryptoReader<R> {
     }
 }
 
-impl<R: Read> Read for ZipCryptoReader<R> {
+impl<R: BufRead> Read for ZipCryptoReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read_bytes = self.reader.read(buf)?;
 
@@ -115,6 +119,16 @@ impl<R: Read> Read for ZipCryptoReader<R> {
             .for_each(|byte| *byte = self.zip_crypto.process_byte(*byte));
 
         Ok(read_bytes)
+    }
+}
+
+impl<R: BufRead> BufRead for ZipCryptoReader<R> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.reader.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.reader.consume(amt)
     }
 }
 

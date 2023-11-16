@@ -61,6 +61,23 @@ pub enum CompressionMethod {
     Deflate(DeflateCompressionMode),
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum EncryptionMethod {
+    NoEncryption,
+    ZipCrypto,
+    Aes,
+}
+
+impl Display for EncryptionMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EncryptionMethod::NoEncryption => write!(f, "No Encryption"),
+            EncryptionMethod::ZipCrypto => write!(f, "Zip Crypto"),
+            EncryptionMethod::Aes => write!(f, "AES"),
+        }
+    }
+}
+
 impl Display for EndOfCentralDirectoryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -161,7 +178,7 @@ pub struct EndOfCentralDirectory {
 pub struct ZipFile {
     offset: u32,
     environment: FileEnvironment,
-    is_encrypted: bool,
+    encryption_method: EncryptionMethod,
     compression_method: CompressionMethod,
     //The following flag will be used for determining whether CRC-32, Compressed size, uncompressed
     //size are written in the local file header if the below flag is set to false then the
@@ -276,6 +293,16 @@ impl ZipFile {
 
         let is_encrypted = (general_purpose_bit_flag & 0x0001) == 1;
 
+        let encryption_method = if is_encrypted {
+            if ((general_purpose_bit_flag >> 6) & 0x0001) > 0 {
+                EncryptionMethod::Aes
+            } else {
+                EncryptionMethod::ZipCrypto
+            }
+        } else {
+            EncryptionMethod::NoEncryption
+        };
+
         let compression_method = match compression_method_bytes {
             0x00 => CompressionMethod::NoCompression,
             0x08 => {
@@ -334,7 +361,7 @@ impl ZipFile {
         Ok(Self {
             offset,
             environment,
-            is_encrypted,
+            encryption_method,
             compression_method,
             data_descriptor_used,
             date_time: zip_date_time,
@@ -413,8 +440,8 @@ impl ZipFile {
         self.offset
     }
 
-    pub fn is_encrypted(&self) -> bool {
-        self.is_encrypted
+    pub fn encryption_method(&self) -> &EncryptionMethod {
+        &self.encryption_method
     }
 }
 
@@ -565,7 +592,10 @@ mod tests {
         let zip_file_result = ZipFile::from_readable(&mut cursor);
 
         assert!(zip_file_result.is_ok());
-        assert!(!zip_file_result.unwrap().is_encrypted);
+        assert_eq!(
+            zip_file_result.unwrap().encryption_method(),
+            &EncryptionMethod::NoEncryption
+        );
 
         cursor = Cursor::new(vec![
             0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x09, 0x00, 0x08, 0x00, 0x6F, 0xA7,
@@ -577,7 +607,25 @@ mod tests {
         let zip_file_result = ZipFile::from_readable(&mut cursor);
 
         assert!(zip_file_result.is_ok());
-        assert!(zip_file_result.unwrap().is_encrypted)
+        assert_eq!(
+            zip_file_result.unwrap().encryption_method(),
+            &EncryptionMethod::ZipCrypto
+        );
+
+        cursor = Cursor::new(vec![
+            0x50, 0x4B, 0x01, 0x02, 0x14, 0x03, 0x14, 0x00, 0x49, 0x00, 0x08, 0x00, 0x6F, 0xA7,
+            0x39, 0x57, 0x7D, 0x99, 0xD7, 0xB2, 0xC6, 0x00, 0x00, 0x00, 0x30, 0x01, 0x00, 0x00,
+            0x0C, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA4, 0x81,
+            0x00, 0x00, 0x00, 0x00, 0x63, 0x76, 0x5F, 0x64, 0x65, 0x62, 0x75, 0x67, 0x2E, 0x6C,
+            0x6F, 0x67,
+        ]);
+        let zip_file_result = ZipFile::from_readable(&mut cursor);
+
+        assert!(zip_file_result.is_ok());
+        assert_eq!(
+            zip_file_result.unwrap().encryption_method(),
+            &EncryptionMethod::Aes
+        )
     }
 
     #[test]
