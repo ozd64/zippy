@@ -4,7 +4,6 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 use zippy::archive::Archive;
-use zippy::pretty_printer::pretty_print_zip_files;
 use zippy::zip::Zip;
 
 const ZIPPY_VERSION: &str = "0.1.0";
@@ -42,9 +41,13 @@ fn main() {
             std::process::exit(ZIP_FILE_PARSING_ERROR_RETURN_CODE);
         }
     };
+    
+    let password = if zip.files_encrypted() {
+        rpassword::prompt_password("Password: ").ok()
+    } else { None };
 
-    pretty_print_zip_files(&zip);
-    let password = None;
+
+    //pretty_print_zip_files(&zip);
     zip.extract_items(parent.unwrap(), password).unwrap();
 }
 
