@@ -41,7 +41,7 @@ impl Display for ExtractError {
             ExtractError::DeflateDecodingError(error_msg) => write!(f, "Unable to decode the deflated stream. {}", error_msg),
             ExtractError::InvalidExtractedFile(crc32, extracted_file_crc32) => write!(f, "Extracted file corruption. CRC-32 checksums are not matching. File CRC-32: 0x{:X}, Extracted file CRC-32: 0x{:X}", crc32, extracted_file_crc32),
             ExtractError::UnsupportedEncryption(encryption_method) => write!(f, "Unsupported encryption method set for the zip file. Read Encryption method: {}", encryption_method),
-            ExtractError::ZipCryptoError(err) => write!(f, "Zip Crypto error!\n{}", err),
+            ExtractError::ZipCryptoError(err) => write!(f, "{}", err),
         }
     }
 }
