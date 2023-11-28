@@ -26,12 +26,7 @@ impl ExtractOptions {
 }
 
 pub fn extract_files(extract_options: ExtractOptions) -> Result<(), ExtractError> {
-    let parent = extract_options
-        .path
-        .parent()
-        .map(|parent_path| PathBuf::from(parent_path));
-
-    let zip_file = match File::open(extract_options.path) {
+    let zip_file = match File::open(extract_options.path.clone()) {
         Ok(file) => BufReader::new(file),
         Err(err) => {
             eprintln!(
@@ -56,7 +51,7 @@ pub fn extract_files(extract_options: ExtractOptions) -> Result<(), ExtractError
         None
     };
 
-    zip.extract_items(parent.unwrap(), password).map(|_| ())
+    zip.extract_items(extract_options, password).map(|_| ())
 }
 
 pub fn list_files<P>(zip_file_path: P)

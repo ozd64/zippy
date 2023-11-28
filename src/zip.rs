@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt::Display;
 use std::io::SeekFrom;
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::archive::{Archive, Extract, ExtractError, ReadableArchive};
+use crate::commands::ExtractOptions;
 use crate::headers::{
     EncryptionMethod, EndOfCentralDirectory, EndOfCentralDirectoryError, ZipFile, ZipFileError,
 };
@@ -135,17 +136,27 @@ impl<R: ReadableArchive> Zip<R> {
 }
 
 impl<R: ReadableArchive> Archive for Zip<R> {
-    fn extract_items<P>(
+    fn extract_items(
         &mut self,
-        extract_path: P,
+        extract_options: ExtractOptions,
         password: Option<String>,
-    ) -> Result<usize, ExtractError>
-    where
-        P: AsRef<Path>,
-    {
+    ) -> Result<usize, ExtractError> {
+        let parent = extract_options
+            .path
+            .parent()
+            .map(|parent_path| PathBuf::from(parent_path))
+            .unwrap();
+
         self.zip_files
             .iter()
-            .map(|zip_item| zip_item.extract(&extract_path, &mut self.readable, &password))
+            .map(|zip_item| {
+                zip_item.extract(
+                    &parent,
+                    &mut self.readable,
+                    &password,
+                    extract_options.verbose,
+                )
+            })
             .try_fold(0, |count, zip_extract_result| {
                 zip_extract_result.map(|_| count + 1)
             })

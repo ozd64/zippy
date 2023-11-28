@@ -448,7 +448,7 @@ impl ZipFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::{io::Cursor, path::PathBuf};
 
     #[test]
     fn test_invalid_zip_file_error() {
@@ -714,5 +714,12 @@ mod tests {
         assert_eq!(zip_file.compressed_size().get(), 0x00140314);
         assert_eq!(zip_file.crc32().get(), 0x02014B50);
         assert_eq!(zip_file.uncompressed_size().get(), 0x00080000);
+    }
+
+    #[test]
+    fn test() {
+        let current_dir = std::env::current_dir().unwrap();
+
+        assert_eq!(PathBuf::new(), current_dir);
     }
 }

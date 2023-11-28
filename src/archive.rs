@@ -8,6 +8,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use crc::{Crc, CRC_32_ISO_HDLC};
 use flate2::bufread::DeflateDecoder;
 
+use crate::commands::ExtractOptions;
 use crate::headers::{CompressionMethod, EncryptionMethod, ZipFile};
 use crate::zip_crypto::{ZipCryptoError, ZipCryptoReader, ZIP_CRYPTO_RANDOM_BYTES_LEN};
 use crate::Crc32;
@@ -55,6 +56,7 @@ pub trait Extract {
         extract_path: &P,
         extract_file: &mut R,
         password: &Option<String>,
+        verbose: bool,
     ) -> Result<(), ExtractError>
     where
         P: AsRef<Path>,
@@ -62,13 +64,11 @@ pub trait Extract {
 }
 
 pub trait Archive {
-    fn extract_items<P>(
+    fn extract_items(
         &mut self,
-        extract_path: P,
+        extract_path: ExtractOptions,
         password: Option<String>,
-    ) -> Result<usize, ExtractError>
-    where
-        P: AsRef<Path>;
+    ) -> Result<usize, ExtractError>;
 }
 
 impl Extract for ZipFile {
@@ -77,6 +77,7 @@ impl Extract for ZipFile {
         extract_path: &P,
         extract_file: &mut R,
         password: &Option<String>,
+        verbose: bool,
     ) -> Result<(), ExtractError>
     where
         P: AsRef<Path>,
@@ -86,6 +87,10 @@ impl Extract for ZipFile {
 
         extracted_file_path.push(extract_path);
         extracted_file_path.push(self.file_name());
+
+        if verbose {
+            println!("Extracting {}", extracted_file_path.display());
+        }
 
         //If the file is just a directory then just create the directory.
         if self.is_dir() {
